@@ -97,7 +97,7 @@
  .run-row { display:grid; grid-template-columns:1fr auto auto; gap:10px; align-items:center; padding:9px 0; border-bottom:1px solid #222; }
  .run-row:last-child { border-bottom:none; }
  .run-row.completed .run-main { opacity:0.4; }
- .run-row.activity-row { background:rgba(255,255,255,0.012); }
+ .run-row.activity-row { background:linear-gradient(rgba(255,255,255,0.012),rgba(255,255,255,0.012)), var(--card); }
  .run-main { display:flex; flex-direction:column; gap:2px; min-width:0; }
  .run-day-label { font-family:'DM Mono',monospace; font-size:10px; color:var(--orange); text-transform:uppercase; letter-spacing:0.08em; }
  .run-desc-text { font-size:13px; color:var(--text); line-height:1.4; }
@@ -130,6 +130,20 @@
  .badge-rest { background:rgba(136,136,136,0.1); color:var(--muted); }
  .badge-long { background:rgba(34,197,94,0.12); color:var(--green); }
 
+ .swipe-wrap { position:relative; overflow:hidden; }
+ .swipe-delete { position:absolute; top:0; right:0; bottom:0; width:88px; background:#dc2626; color:#fff; display:flex; align-items:center; justify-content:center; font-family:'DM Mono',monospace; font-size:10px; letter-spacing:0.08em; text-transform:uppercase; cursor:pointer; -webkit-tap-highlight-color:transparent; }
+ .swipe-delete:active { background:#b91c1c; }
+ .swipe-layer { position:relative; background:var(--card); transition:transform 0.25s cubic-bezier(.4,0,.2,1); touch-action:pan-y; }
+ .swipe-layer.dragging { transition:none; }
+ .swipe-layer.open { transform:translateX(-88px); }
+ .weight-row.swipe-layer { background:var(--card); }
+ .weight-row.wt-entry.swipe-layer { background:linear-gradient(rgba(59,130,246,0.07),rgba(59,130,246,0.07)), var(--card); }
+
+ .toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(120%); z-index:200; display:flex; align-items:center; gap:14px; background:#1c1c1c; border:1px solid var(--border); border-radius:8px; padding:11px 14px; box-shadow:0 6px 24px rgba(0,0,0,0.5); opacity:0; transition:transform 0.3s cubic-bezier(.4,0,.2,1),opacity 0.3s; pointer-events:none; max-width:calc(100vw - 32px); }
+ .toast.show { transform:translateX(-50%) translateY(0); opacity:1; pointer-events:auto; }
+ .toast-msg { font-size:13px; color:var(--text); white-space:nowrap; }
+ .toast-undo { font-family:'DM Mono',monospace; font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:var(--orange); background:none; border:none; cursor:pointer; padding:2px 4px; -webkit-tap-highlight-color:transparent; }
+
  .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:100; align-items:flex-end; justify-content:center; }
  .modal-overlay.open { display:flex; }
  .modal { background:#1c1c1c; border:1px solid var(--border); border-radius:14px 14px 0 0; padding:24px 20px 44px; width:100%; max-width:480px; }
@@ -155,6 +169,11 @@
 </style>
 </head>
 <body>
+
+<div class="toast" id="toast">
+ <span class="toast-msg" id="toastMsg"></span>
+ <button class="toast-undo" id="toastUndo">Undo</button>
+</div>
 
 <button class="cal-icon-btn" onclick="openCal()">&#128197;</button>
 
@@ -426,6 +445,7 @@ const TOTAL_STRENGTH = ACT_ITEMS.filter(i => i.type === 'strength').length;
 function getState() { try { return JSON.parse(localStorage.getItem('hmp_v4')||'{}'); } catch(e) { return {}; } }
 function saveState(s) { try { localStorage.setItem('hmp_v4', JSON.stringify(s)); } catch(e) {} }
 function getCompleted() { return getState().completed || []; }
+function getDeleted() { return getState().deleted || []; }
 function getWeightSessions() { return getState().weight || []; }
 
 function toggleRun(id) {
@@ -442,23 +462,30 @@ function addWeight(date, type) {
  if (document.getElementById('calDrawer').classList.contains('open')) renderCalendar();
 }
 function deleteWeight(wid) {
- const s = getState(); s.weight = (s.weight||[]).filter(w=>w.id!==wid);
- saveState(s); renderAll();
+ const s = getState();
+ const removed = (s.weight||[]).find(w=>w.id===wid);
+ s.weight = (s.weight||[]).filter(w=>w.id!==wid);
+ saveState(s); renderAll(); updateProgress();
  if (document.getElementById('calDrawer').classList.contains('open')) renderCalendar();
+ if (removed) showToast('Session deleted', () => { const st=getState(); st.weight=st.weight||[]; st.weight.push(removed); saveState(st); renderAll(); updateProgress(); if(document.getElementById('calDrawer').classList.contains('open')) renderCalendar(); });
 }
 
 function updateProgress() {
- const completed = getCompleted();
- const runsDone = RUN_ITEMS.filter(r => completed.includes(r.id)).length;
- const pct = Math.round((runsDone/TOTAL_RUNS)*100);
+ const completed = getCompleted(), deleted = getDeleted();
+ const activeRuns = RUN_ITEMS.filter(r => !deleted.includes(r.id));
+ const totalRuns = activeRuns.length;
+ const runsDone = activeRuns.filter(r => completed.includes(r.id)).length;
+ const pct = totalRuns ? Math.round((runsDone/totalRuns)*100) : 0;
  const circ = 364.4;
  document.getElementById('ringFill').style.strokeDashoffset = circ-(pct/100)*circ;
  document.getElementById('ringPct').textContent = pct+'%';
- document.getElementById('runsCompleted').textContent = runsDone+' / '+TOTAL_RUNS+' runs';
- const vDone = ACT_ITEMS.filter(a => a.type==='vball' && completed.includes(a.id)).length;
- const sDone = ACT_ITEMS.filter(a => a.type==='strength' && completed.includes(a.id)).length;
+ document.getElementById('runsCompleted').textContent = runsDone+' / '+totalRuns+' runs';
+ const activeV = ACT_ITEMS.filter(a => a.type==='vball' && !deleted.includes(a.id));
+ const activeS = ACT_ITEMS.filter(a => a.type==='strength' && !deleted.includes(a.id));
+ const vDone = activeV.filter(a => completed.includes(a.id)).length;
+ const sDone = activeS.filter(a => completed.includes(a.id)).length;
  document.getElementById('activitiesCompleted').innerHTML =
-   `<span class="vball-c">\ud83c\udfd0 ${vDone}/${TOTAL_VBALL} volleyball</span> &nbsp;&middot;&nbsp; <span class="strength-c">\ud83d\udcaa ${sDone}/${TOTAL_STRENGTH} strength</span>`;
+   `<span class="vball-c">\ud83c\udfd0 ${vDone}/${activeV.length} volleyball</span> &nbsp;&middot;&nbsp; <span class="strength-c">\ud83d\udcaa ${sDone}/${activeS.length} strength</span>`;
 }
 
 const PHASE_MAP = {};
@@ -491,9 +518,10 @@ function fmtDate(d) {
 }
 
 function renderAll() {
- const completed = getCompleted(), weight = getWeightSessions();
+ const completed = getCompleted(), weight = getWeightSessions(), deleted = getDeleted();
  const weeks = {};
  ITEMS.forEach(r => {
+   if (deleted.includes(r.id)) return;
    if (!weeks[r.week]) weeks[r.week] = {items:[], wl:r.wl, wd:r.wd, cid:PHASE_MAP[r.week]};
    weeks[r.week].items.push(r);
  });
@@ -532,25 +560,31 @@ function renderAll() {
          const checkColor = r.type==='vball' ? 'background:var(--amber);border-color:var(--amber);'
                           : r.type==='strength' ? 'background:var(--blue);border-color:var(--blue);'
                           : 'background:var(--green);border-color:var(--green);';
-         return `<div class="run-row ${done?'completed':''} ${isAct?'activity-row':''}">
-           <div class="run-main">
-             <span class="run-day-label" style="${labelColor(r)}">${getDayLabel(r)}</span>
-             <span class="run-desc-text">${r.label}</span>
-             <span class="run-note">${r.note}</span>
+         return `<div class="swipe-wrap">
+           <div class="swipe-delete" onclick="deleteItem('${r.id}')">Delete</div>
+           <div class="run-row swipe-layer ${done?'completed':''} ${isAct?'activity-row':''}">
+             <div class="run-main">
+               <span class="run-day-label" style="${labelColor(r)}">${getDayLabel(r)}</span>
+               <span class="run-desc-text">${r.label}</span>
+               <span class="run-note">${r.note}</span>
+             </div>
+             <span class="run-dist ${isAct?'activity-dist':''}">${r.dist}</span>
+             <div class="run-check" onclick="toggleRun('${r.id}')" style="${done?checkColor:''}">${done?'\u2713':''}</div>
            </div>
-           <span class="run-dist ${isAct?'activity-dist':''}">${r.dist}</span>
-           <div class="run-check" onclick="toggleRun('${r.id}')" style="${done?checkColor:''}">${done?'\u2713':''}</div>
          </div>`;
        }).join('')}
-       ${ww.map(w=>`<div class="weight-row wt-entry">
-         <span class="weight-tag">\ud83d\udcaa Extra</span>
-         <span class="weight-text">${w.type} \u00b7 ${fmtDate(w.date)}</span>
-         <button class="weight-delete" onclick="deleteWeight('${w.id}')">\u00d7</button>
+       ${ww.map(w=>`<div class="swipe-wrap">
+         <div class="swipe-delete" onclick="deleteWeight('${w.id}')">Delete</div>
+         <div class="weight-row wt-entry swipe-layer">
+           <span class="weight-tag">\ud83d\udcaa Extra</span>
+           <span class="weight-text">${w.type} \u00b7 ${fmtDate(w.date)}</span>
+         </div>
        </div>`).join('')}
        <button class="add-weight-btn" onclick="openWtModal('${minD}')">+ Add extra session</button>
      </div>`;
    cont.appendChild(card);
  });
+ setupSwipe();
 }
 
 // ─── CALENDAR ────────────────────────────────────────────────────────────────
@@ -569,7 +603,8 @@ function renderCalendar() {
  const today = new Date();
  for (let i=0;i<firstDay;i++) { const el=document.createElement('div'); el.className='cal-day empty'; grid.appendChild(el); }
  const ibd={}, wbd={};
- ITEMS.forEach(r => { if(!ibd[r.date]) ibd[r.date]=[]; ibd[r.date].push(r); });
+ const _del = getDeleted();
+ ITEMS.forEach(r => { if(_del.includes(r.id)) return; if(!ibd[r.date]) ibd[r.date]=[]; ibd[r.date].push(r); });
  weight.forEach(w => { if(!wbd[w.date]) wbd[w.date]=[]; wbd[w.date].push(w); });
  for (let day=1;day<=dim;day++) {
    const ds = calYear+'-'+String(calMonth+1).padStart(2,'0')+'-'+String(day).padStart(2,'0');
@@ -618,6 +653,90 @@ function saveWeightSession() {
 }
 document.getElementById('wtModal').addEventListener('click',function(e){ if(e.target===this) closeWtModal(); });
 
+// ─── DELETION + UNDO TOAST ───────────────────────────────────────────────────
+function deleteItem(id) {
+ const s = getState(); if (!s.deleted) s.deleted = [];
+ if (!s.deleted.includes(id)) s.deleted.push(id);
+ saveState(s); renderAll(); updateProgress();
+ if (document.getElementById('calDrawer').classList.contains('open')) renderCalendar();
+ const item = ITEMS.find(i => i.id === id);
+ const name = item ? item.label : 'Event';
+ showToast(name + ' deleted', () => {
+   const st = getState(); st.deleted = (st.deleted||[]).filter(d => d !== id);
+   saveState(st); renderAll(); updateProgress();
+   if (document.getElementById('calDrawer').classList.contains('open')) renderCalendar();
+ });
+}
+
+let toastTimer = null, toastUndoFn = null;
+function showToast(msg, undoFn) {
+ const t = document.getElementById('toast');
+ document.getElementById('toastMsg').textContent = msg;
+ toastUndoFn = undoFn;
+ t.classList.add('show');
+ clearTimeout(toastTimer);
+ toastTimer = setTimeout(hideToast, 4500);
+}
+function hideToast() { document.getElementById('toast').classList.remove('show'); toastUndoFn = null; }
+document.getElementById('toastUndo').addEventListener('click', () => {
+ if (toastUndoFn) toastUndoFn();
+ hideToast();
+});
+
+// ─── SWIPE-TO-DELETE ─────────────────────────────────────────────────────────
+function closeOpenSwipes(except) {
+ document.querySelectorAll('.swipe-layer.open').forEach(el => { if (el !== except) el.classList.remove('open'); });
+}
+function setupSwipe() {
+ document.querySelectorAll('.swipe-layer').forEach(layer => {
+   let startX = 0, startY = 0, dx = 0, dragging = false, decided = false, horiz = false;
+   const OPEN = 88, THRESH = 44;
+
+   layer.addEventListener('touchstart', e => {
+     startX = e.touches[0].clientX; startY = e.touches[0].clientY;
+     dx = 0; dragging = true; decided = false; horiz = false;
+     // close any other open row
+     closeOpenSwipes(layer);
+   }, {passive:true});
+
+   layer.addEventListener('touchmove', e => {
+     if (!dragging) return;
+     const cx = e.touches[0].clientX, cy = e.touches[0].clientY;
+     const mx = cx - startX, my = cy - startY;
+     if (!decided) {
+       if (Math.abs(mx) > 8 || Math.abs(my) > 8) {
+         decided = true;
+         horiz = Math.abs(mx) > Math.abs(my);
+         if (horiz) layer.classList.add('dragging');
+       }
+     }
+     if (!horiz) return;
+     e.preventDefault();
+     const base = layer.classList.contains('open') ? -OPEN : 0;
+     dx = base + mx;
+     if (dx > 0) dx = 0;
+     if (dx < -OPEN - 30) dx = -OPEN - 30;
+     layer.style.transform = 'translateX(' + dx + 'px)';
+   }, {passive:false});
+
+   layer.addEventListener('touchend', () => {
+     if (!dragging) return;
+     dragging = false;
+     layer.classList.remove('dragging');
+     layer.style.transform = '';
+     if (horiz) {
+       if (dx <= -THRESH) layer.classList.add('open');
+       else layer.classList.remove('open');
+     }
+   });
+ });
+}
+
+// Tap anywhere else closes an open swipe row
+document.addEventListener('click', e => {
+ if (!e.target.closest('.swipe-delete') && !e.target.closest('.swipe-layer.open')) closeOpenSwipes(null);
+}, true);
+
 function showPhase(idx) {
  document.querySelectorAll('.phase-panel').forEach((p,i)=>p.classList.toggle('active',i===idx));
  document.querySelectorAll('.phase-tab').forEach((t,i)=>t.classList.toggle('active',i===idx));
@@ -627,3 +746,5 @@ renderAll(); updateProgress();
 </script>
 </body>
 </html>
+
+Sent from my iPhone
